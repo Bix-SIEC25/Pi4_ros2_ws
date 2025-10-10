@@ -70,7 +70,6 @@ def generate_launch_description():
         ]
     )
 
-
     can_tx_node = Node(
         package="can",
         executable="can_tx_node",
@@ -106,18 +105,15 @@ def generate_launch_description():
         emulate_tty=True
     )
 
-    v4l2_camera_node = Node(
-        package="v4l2_camera",
-        executable="v4l2_camera_node",
+    audio_player_node = Node(
+        package="audio_common",
+        executable="audio_player_node",
         emulate_tty=True
     )
 
-    audio_capture_node = Node(
-        package="audio_capture",
-        executable="audio_capture_node",
-        parameters=[{
-            "device": "hw:1,0"
-        }],
+    tts_node = Node(
+        package="audio_common",
+        executable="tts_node",
         emulate_tty=True
     )
 
@@ -133,7 +129,7 @@ def generate_launch_description():
     ld.add_action(imu_filter_madgwick_node)
     ld.add_action(system_check_node)
     ld.add_action(sllidar_node)
-    ld.add_action(v4l2_camera_node)
-    ld.add_action(audio_capture_node)
+    ld.add_action(audio_player_node)
+    ld.add_action(tts_node)
 
     return ld
