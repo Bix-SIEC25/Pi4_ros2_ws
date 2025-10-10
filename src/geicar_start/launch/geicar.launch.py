@@ -46,32 +46,6 @@ def generate_launch_description():
         emulate_tty=True
     )
 
-    wheel_odom_node = Node(
-        package="wheel_odom",
-        executable="wheel_odom_node",
-        parameters=[{
-            "wheel_radius": 0.095,        # à ajuster
-            "wheel_separation": 0.50,    # à ajuster
-            "ticks_per_rev": 36,
-            "frame_id": "odom",
-            "child_frame_id": "base_link",
-        }],
-        emulate_tty=True
-    )
-
-
-    laser_static_tf = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="base_to_laser_tf",
-        arguments=[
-            "-0.5", "0.0", "0.5",   # x, y, z (m)
-            "0", "0", "0",          # roll, pitch, yaw (rad)
-            "base_link",            # parent
-            "laser"                 # enfant = frame du LIDAR
-        ]
-    )
-
     can_tx_node = Node(
         package="can",
         executable="can_tx_node",
@@ -111,11 +85,9 @@ def generate_launch_description():
     ld.add_action(can_rx_node)
     ld.add_action(car_control_node)
     ld.add_action(safety_stop_node)
-    ld.add_action(wheel_odom_node)
-    ld.add_action(laser_static_tf)
     ld.add_action(can_tx_node)
-    ld.add_action(imu_filter_madgwick_node)
-    ld.add_action(system_check_node)
+    # ld.add_action(imu_filter_madgwick_node)
+    # ld.add_action(system_check_node)
     ld.add_action(audio_player_node)
     ld.add_action(tts_node)
 
