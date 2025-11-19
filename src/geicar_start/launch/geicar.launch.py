@@ -35,8 +35,10 @@ def generate_launch_description():
         package="safety_stop",
         executable="safety_stop_node",
         parameters=[{
-            "stop_dist_front_cm": 10,
-            "stop_dist_rear_cm": 10,
+            "stop_dist_front_cm": 30,
+            "stop_dist_rear_cm": 30,
+            "slow_dist_front_cm": 55,
+            "slow_dist_rear_cm": 55,
             "us_timeout_ms": 200,
             "cmd_timeout_ms": 200,
             "log_actions": True
@@ -91,20 +93,6 @@ def generate_launch_description():
         emulate_tty=True
     )
 
-    sllidar_node = Node(
-        package="sllidar_ros2",
-        executable="sllidar_node",
-        parameters=[{
-            "channel_type": "serial",
-            "serial_port": "/dev/ttyUSB0",
-            "serial_baudrate": 256000,
-            "frame_id": "laser",
-            "inverted": False,
-            "angle_compensate": True
-        }],
-        emulate_tty=True
-    )
-
     audio_player_node = Node(
         package="audio_common",
         executable="audio_player_node",
@@ -128,7 +116,6 @@ def generate_launch_description():
     ld.add_action(can_tx_node)
     ld.add_action(imu_filter_madgwick_node)
     ld.add_action(system_check_node)
-    ld.add_action(sllidar_node)
     ld.add_action(audio_player_node)
     ld.add_action(tts_node)
 
