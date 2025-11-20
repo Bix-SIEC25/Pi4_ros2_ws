@@ -2,18 +2,27 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
+import concurrent.futures
+import urllib.parse
+import urllib.request
+import ssl
 
-# === CHANGE THIS to the package that contains your LogEntry.msg ===
-# If your msg is defined in package named "my_logger_msgs", leave as below.
-# If it's in the same package, use: from <your_package_name>.msg import LogEntry
+try:
+    import requests  # type: ignore
+    HAS_REQUESTS = True
+except Exception:
+    HAS_REQUESTS = False
+
 from interfaces.msg import LogEntry
 
-# Map numeric levels to readable names
 LEVEL_NAMES = {
     0: "TRACE",
     1: "DEBUG",
     2: "ERROR"
 }
+
+SERVER_BASE = "https://micasend.magictintin.fr/msg.php"
+HTTP_TIMEOUT = 5  # seconds
 
 
 class LoggerSubscriber(Node):
@@ -21,7 +30,6 @@ class LoggerSubscriber(Node):
     def __init__(self, topic_name: str = '/logger'):
         super().__init__('LoggerSubscriber')
         qos = QoSProfile(depth=10)
-        # subscribe to the topic carrying LogEntry messages
         self.subscription = self.create_subscription(
             LogEntry,
             topic_name,
@@ -29,20 +37,61 @@ class LoggerSubscriber(Node):
             qos)
         self.subscription  # avoid unused var warning
 
+        # thread pool to make non bloquant request
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+        # SSL context used by urllib fallback
+        self._ssl_context = ssl.create_default_context()
+
+        self.get_logger().info(f"LoggerSubscriber started, subscribing to: {topic_name}")
+
     def listener_callback(self, msg: LogEntry):
-        # convert numeric level to a name (fallback to LEVEL(n) if unknown)
         level_name = LEVEL_NAMES.get(msg.level, f"LEVEL({msg.level})")
-        # msg.sender and msg.message are strings as defined in LogEntry.msg
-        self.get_logger().info(f"[{level_name}] {msg.sender}: {msg.message}")
+        self.get_logger().info(f"Received log [{level_name}] {msg.sender}: {msg.message}")
+
+        # Schedule HTTP sending in a thread pool to avoid blocking callback
+        try:
+            self._executor.submit(self._send_to_server, str(msg.sender), str(msg.message))
+        except Exception as e:
+            self.get_logger().error(f"Failed to schedule send_to_server: {e}")
+
+    def _send_to_server(self, sender: str, message: str) -> None:
+        # Build params and URL-encode them
+        params = {'sender': sender, 'message': message}
+        query = urllib.parse.urlencode(params, safe='')
+        url = f"{SERVER_BASE}?{query}"
+
+        try:
+            if HAS_REQUESTS:
+                # requests package
+                resp = requests.get(SERVER_BASE, params=params, timeout=HTTP_TIMEOUT)
+                status = resp.status_code
+                text_preview = resp.text[:200]  # crop
+                self.get_logger().info(f"Sent to server ({status}) - preview: {text_preview}")
+            else:
+                # urllib fallback
+                req = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT, context=self._ssl_context) as resp:
+                    body = resp.read(200)  #crop
+                    status = resp.getcode()
+                    self.get_logger().info(f"Sent to server ({status}) - preview: {body!r}")
+        except Exception as e:
+            self.get_logger().error(f"Error sending log to server for sender='{sender}': {e}")
+
+    def destroy_node(self):
+        # clean up executor
+        try:
+            self._executor.shutdown(wait=False)
+        except Exception:
+            pass
+        return super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
 
-    # You can change the topic name here if you used a different one (e.g. 'Logger')
     topic = '/logger'
     node = LoggerSubscriber(topic_name=topic)
-
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

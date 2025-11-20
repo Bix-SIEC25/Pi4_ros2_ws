@@ -13,8 +13,8 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='gaspar',
-    maintainer_email='gaspar@todo.todo',
+    maintainer='MagicTINTIN',
+    maintainer_email='magictintin@proton.me',
     description='Logger that sends logs to server',
     license='GPL-3.0-only',
     extras_require={
