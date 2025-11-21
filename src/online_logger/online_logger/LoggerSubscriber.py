@@ -16,12 +16,15 @@ except Exception:
 from interfaces.msg import LogEntry
 
 LEVEL_NAMES = {
-    0: "TRACE",
-    1: "DEBUG",
-    2: "ERROR"
+    4: "TRACE",
+    3: "DEBUG",
+    2: "TRACE",
+    1: "WARN",
+    0: "ERROR"
 }
 
-SERVER_BASE = "https://micasend.magictintin.fr/msg.php"
+MS_SERVER_BASE = "https://micasend.magictintin.fr/msg.php"
+SERVER_BASE = "https://bix.ovh/add_log"
 HTTP_TIMEOUT = 5  # seconds
 
 
@@ -50,14 +53,43 @@ class LoggerSubscriber(Node):
         self.get_logger().info(f"Received log [{level_name}] {msg.sender}: {msg.message}")
 
         # Schedule HTTP sending in a thread pool to avoid blocking callback
-        try:
-            self._executor.submit(self._send_to_server, str(msg.sender), str(msg.message))
-        except Exception as e:
-            self.get_logger().error(f"Failed to schedule send_to_server: {e}")
+        if int(msg.level) == 4:
+            try:
+                self._executor.submit(self._send_to_ms_server, str(msg.sender), str(msg.message))
+            except Exception as e:
+                self.get_logger().error(f"Failed to schedule send_to_ms_server: {e}")
+        else:
+            try:
+                self._executor.submit(self._send_to_server, str(msg.sender), int(msg.level), str(msg.message))
+            except Exception as e:
+                self.get_logger().error(f"Failed to schedule send_to_server: {e}")
 
-    def _send_to_server(self, sender: str, message: str) -> None:
+    def _send_to_ms_server(self, sender: str, message: str) -> None:
         # Build params and URL-encode them
         params = {'sender': sender, 'message': message}
+        query = urllib.parse.urlencode(params, safe='')
+        url = f"{MS_SERVER_BASE}?{query}"
+
+        try:
+            if HAS_REQUESTS:
+                # requests package
+                resp = requests.get(MS_SERVER_BASE, params=params, timeout=HTTP_TIMEOUT)
+                status = resp.status_code
+                text_preview = resp.text[:200]  # crop
+                self.get_logger().info(f"Sent to ms server ({status})")
+            else:
+                # urllib fallback
+                req = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT, context=self._ssl_context) as resp:
+                    body = resp.read(200)  #crop
+                    status = resp.getcode()
+                    self.get_logger().info(f"Sent to ms server ({status})")
+        except Exception as e:
+            self.get_logger().error(f"Error sending log to server for sender='{sender}': {e}")
+
+    def _send_to_server(self, sender: str, level: int, message: str) -> None:
+        # Build params and URL-encode them
+        params = {'sender': sender, 'type': level, 'msg': message}
         query = urllib.parse.urlencode(params, safe='')
         url = f"{SERVER_BASE}?{query}"
 
@@ -77,7 +109,7 @@ class LoggerSubscriber(Node):
                     self.get_logger().info(f"Sent to server ({status}) - preview: {body!r}")
         except Exception as e:
             self.get_logger().error(f"Error sending log to server for sender='{sender}': {e}")
-
+            
     def destroy_node(self):
         # clean up executor
         try:
