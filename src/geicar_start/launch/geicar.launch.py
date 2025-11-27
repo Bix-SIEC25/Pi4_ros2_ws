@@ -39,8 +39,8 @@ def generate_launch_description():
             "stop_dist_rear_cm": 30,
             "slow_dist_front_cm": 55,
             "slow_dist_rear_cm": 55,
-            "us_timeout_ms": 200,
-            "cmd_timeout_ms": 200,
+            "us_timeout_ms": 99999999999,
+            "cmd_timeout_ms": 99999999999,
             "log_actions": True
         }],
         emulate_tty=True
