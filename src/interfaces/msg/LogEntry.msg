@@ -1,3 +1,4 @@
+uint8 DASHBOARD=5
 uint8 MS=4
 uint8 DEBUG=3
 uint8 TRACE=2
