@@ -31,6 +31,18 @@ def generate_launch_description():
         emulate_tty=True
     )
 
+    online_logger = Node(
+        package="online_logger",
+        executable="online_logger",
+        emulate_tty=True
+    )
+
+    watchdog = Node(
+        package="watchdog",
+        executable="watchdog",
+        emulate_tty=True
+    )
+
     safety_stop_node = Node(
         package="safety_stop",
         executable="safety_stop_node",
@@ -84,11 +96,13 @@ def generate_launch_description():
     ld.add_action(joystick_to_cmd_node)
     ld.add_action(can_rx_node)
     ld.add_action(car_control_node)
+    ld.add_action(online_logger)
     ld.add_action(safety_stop_node)
     ld.add_action(can_tx_node)
     # ld.add_action(imu_filter_madgwick_node)
     # ld.add_action(system_check_node)
     ld.add_action(audio_player_node)
     ld.add_action(tts_node)
+    ld.add_action(watchdog)
 
     return ld
