@@ -5,6 +5,7 @@
 #include <string>
 #include <iomanip>
 #include <iostream>
+#include <sys/statvfs.h>
 
 #include "rclcpp/rclcpp.hpp"
 #include "interfaces/msg/log_entry.hpp"
@@ -26,10 +27,28 @@ public:
       5s, std::bind(&WatchdogPublisher::timer_callback, this));
 
     RCLCPP_INFO(this->get_logger(), "WatchdogPublisher started");
+    auto msg = interfaces::msg::LogEntry();
+    msg.level = 2;
+    msg.sender = "watchdog";
+    std::ostringstream msg_ss;
+    msg_ss << "Car is starting...";
+    msg.message = msg_ss.str();
+
+    publisher_->publish(msg);
   }
 
 private:
   // --- system stats (like cpu... etc) ---
+
+  bool get_disk_usage(const char* path, unsigned long long& total_kb, unsigned long long& available_kb) {
+    struct statvfs stat;
+    if (statvfs(path, &stat) != 0) {
+      return false;
+    }
+    total_kb = stat.f_blocks * stat.f_frsize / 1024;
+    available_kb = stat.f_bavail * stat.f_frsize / 1024;
+    return true;
+  }
 
   bool read_cpu_counters(unsigned long long &idle, unsigned long long &total)
   {
@@ -190,6 +209,11 @@ private:
       msg_ss << " | Mem: " << used_mb << "MiB/" << total_mb << "MiB (" << mem_percent << "%)";
     } else {
       msg_ss << " | Mem: N/A";
+    }
+
+    unsigned long long total_disk, available_disk;
+    if (get_disk_usage("/", total_disk, available_disk)) {
+      msg_ss << " | Disk: " << total_disk << "kB, free: " << available_disk << "kB\n";
     }
 
     msg_ss << " | Load1: " << std::setprecision(2) << load1 << std::setprecision(1);
