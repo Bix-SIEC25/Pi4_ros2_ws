@@ -27,12 +27,17 @@ public:
       5s, std::bind(&WatchdogPublisher::timer_callback, this));
 
     RCLCPP_INFO(this->get_logger(), "WatchdogPublisher started");
+    
+    logger(2, "pi_watchdog", "GeiCar started...");
+  }
+
+  void logger(int lvl, std::string sender, std::string message) {
     auto msg = interfaces::msg::LogEntry();
-    msg.level = 2;
-    msg.sender = "watchdog";
-    std::ostringstream msg_ss;
-    msg_ss << "Car is starting...";
-    msg.message = msg_ss.str();
+    msg.level = lvl;
+    msg.sender = sender;
+    // std::ostringstream msg_ss;
+    // msg_ss << message; //.str()
+    msg.message = message;
 
     publisher_->publish(msg);
   }
@@ -213,7 +218,7 @@ private:
 
     unsigned long long total_disk, available_disk;
     if (get_disk_usage("/", total_disk, available_disk)) {
-      msg_ss << " | Disk: " << total_disk << "kB, free: " << available_disk << "kB\n";
+      msg_ss << " | Free disk: " << available_disk / 1024 << "MiB (" << (total_disk - available_disk)/total_disk << "%)\n";
     }
 
     msg_ss << " | Load1: " << std::setprecision(2) << load1 << std::setprecision(1);
@@ -227,7 +232,7 @@ private:
     // publish as LogEntry
     auto msg = interfaces::msg::LogEntry();
     msg.level = 2;
-    msg.sender = "watchdog";
+    msg.sender = "pi_watchdog";
     msg.message = msg_ss.str();
 
     publisher_->publish(msg);
