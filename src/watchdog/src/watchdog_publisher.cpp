@@ -28,7 +28,7 @@ public:
 
     RCLCPP_INFO(this->get_logger(), "WatchdogPublisher started");
     
-    logger(2, "pi_watchdog", "GeiCar started...");
+    logger(2, "pi_watchdog", "Initializing...");
   }
 
   void logger(int lvl, std::string sender, std::string message) {
@@ -203,6 +203,7 @@ private:
     msg_ss << std::fixed << std::setprecision(1);
 
     if (cpu_percent < 0.0) {
+      logger(2, "pi_watchdog", "GeiCar is starting...");
       msg_ss << "CPU: N/A (first reading)";
     } else {
       msg_ss << "CPU: " << cpu_percent << "%";
@@ -218,7 +219,7 @@ private:
 
     unsigned long long total_disk, available_disk;
     if (get_disk_usage("/", total_disk, available_disk)) {
-      msg_ss << " | Free disk: " << available_disk / 1024 << "MiB (" << (total_disk - available_disk)/total_disk << "%)\n";
+      msg_ss << " | Free disk: " << available_disk / 1024 << "MiB (" << (100 * (total_disk - available_disk)) /total_disk << "%)\n";
     }
 
     msg_ss << " | Load1: " << std::setprecision(2) << load1 << std::setprecision(1);
