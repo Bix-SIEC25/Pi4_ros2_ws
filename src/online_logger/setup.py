@@ -25,7 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
             'online_logger = online_logger.LoggerSubscriber:main',
-            'socket_listener = online_logger.SocketListener:main'
+            'socket_listener = online_logger.SocketListener:main',
+            'socket_listener_tts = online_logger.SocketListenerTTS:main',
         ],
     },
 )
