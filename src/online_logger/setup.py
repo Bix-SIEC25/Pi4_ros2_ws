@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='MagicTINTIN',
     maintainer_email='magictintin@proton.me',
-    description='Logger that sends logs to server',
+    description='Logger that sends logs to server and receive data from websocket',
     license='GPL-3.0-only',
     extras_require={
         'test': [
@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'online_logger = online_logger.LoggerSubscriber:main'
+            'socket_listener = online_logger.SocketListener:main'
         ],
     },
 )
