@@ -119,7 +119,7 @@ class WebsocketMusicBridge(Node):
                         # react to the expected message (exact match)
                         if msg == self.expected_message:
                             # Make a ROS service call (non-blocking)
-                            self._call_music_play(msg)
+                            self._call_music_play("horn")
                         # else: ignore or extend for other messages
                     # if we exit the async for, connection closed gracefully
                     self.get_logger().warn("Websocket connection closed, will attempt reconnect")
