@@ -1,7 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "interfaces/msg/motors_order.hpp"
 #include "interfaces/msg/ultrasonic.hpp"
-
+#include "interfaces/msg/log_entry.hpp"
 #include <algorithm>
 #include <chrono>
 
@@ -38,6 +38,9 @@ public:
     pub_safe_order_ = create_publisher<interfaces::msg::MotorsOrder>(
         "motors_order", qos_cmd);
 
+    // Publisher : logging stops to web interface
+    pub_log_ = create_publisher<interfaces::msg::LogEntry>("/logger", 10);
+    
     // Souscriptions
     sub_us_ = create_subscription<interfaces::msg::Ultrasonic>(
         "us_data", qos_sensor,
@@ -68,6 +71,7 @@ public:
 private:
   // ---- Données ----
   rclcpp::Publisher<interfaces::msg::MotorsOrder>::SharedPtr pub_safe_order_;
+  rclcpp::Publisher<interfaces::msg::LogEntry>::SharedPtr pub_log_;
   rclcpp::Subscription<interfaces::msg::Ultrasonic>::SharedPtr sub_us_;
   rclcpp::Subscription<interfaces::msg::MotorsOrder>::SharedPtr sub_raw_order_;
   rclcpp::TimerBase::SharedPtr timer_health_;
@@ -113,6 +117,8 @@ private:
 
     if (d <= d_stop) {
       // zone d’arrêt : PWM = 50 (neutre)
+      std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_front_cm_) +  " {}cm)]";
+      web_logger(4,"safety_stop_node", message);
       return 50;
     }
 
@@ -147,6 +153,7 @@ private:
 
     if (d <= d_stop) {
       // zone d’arrêt : PWM = 50 (neutre)
+      std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING BACKWARD (limit= " + std::to_string(stop_dist_rear_cm_) +  " {}cm)]";
       return 50;
     }
 
@@ -223,6 +230,16 @@ private:
     pub_safe_order_->publish(out);
   }
 
+  //Publish log to web interface:
+  void web_logger(int lvl, std::string sender, std::string message){
+    auto msg = interfaces::msg::LogEntry();
+    msg.level = lvl;
+    msg.sender = sender;
+    msg.message = message;
+
+    pub_log_->publish(msg);
+  }
+
   // ---- Callbacks ----
   void onUltrasonic(const interfaces::msg::Ultrasonic &msg) {
     last_us_ = msg;
@@ -256,6 +273,8 @@ private:
             get_logger(), *get_clock(), 2000,
             "No fresh US data (>%d ms). Hard STOP for safety.",
             us_timeout_ms_);
+	web_logger(4,"safety_stop_node",
+		   "safety_stop_node stopping car due to: [ULTRASOUND SENSOR DATA TIMEOUT]");      
       }
     } else {
       // US OK → clamp dynamique + rampe
@@ -340,9 +359,13 @@ private:
             get_logger(), *get_clock(), 2000,
             "Cmd timeout > %d ms (age=%ld ms): forcing hard STOP.",
             cmd_timeout_ms_, (long)age_ms);
+	    web_logger(4,"safety_stop_node",
+		       "safety_stop_node stopping car due to: [WATCHDOG TIMEOUT]");      
+	
       }
     }
   }
+
 };
 
 int main(int argc, char* argv[]) {
