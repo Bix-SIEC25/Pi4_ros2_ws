@@ -18,9 +18,12 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionClient
 
 # Service type
 from audio_common_msgs.srv import MusicPlay
+from audio_common_msgs.action import TTS
+
 
 # websocket client lib
 try:
@@ -29,21 +32,27 @@ except Exception as e:
     websockets = None
 
 WS_URL = "wss://magictintin.fr/ws"
-SUBSCRIBE_MSG = "bix/wristband:ping"
-EXPECTED_MESSAGE = "new fall"
+SUBSCRIBE_MSGS = ["bix/wristband:ping", "bix/fall_alert:ping", "micasend:ping"]
+FALL_MESSAGE = "new fall"
+HORN_MESSAGE = "horn"
+GOTO_MESSAGE = "fall>"
 
 
-class WebsocketMusicBridge(Node):
+class SocketListener(Node):
     def __init__(
         self,
         ws_url: str = WS_URL,
-        subscribe_message: str = SUBSCRIBE_MSG,
-        expected_message: str = EXPECTED_MESSAGE,
+        subscribe_messages = SUBSCRIBE_MSGS,
+        fall_message: str = FALL_MESSAGE,
+        horn_message: str = HORN_MESSAGE,
+        goto_message: str = GOTO_MESSAGE,
     ):
         super().__init__("ws_music_bridge")
         self.ws_url = ws_url
-        self.subscribe_message = subscribe_message
-        self.expected_message = expected_message
+        self.subscribe_messages = subscribe_messages
+        self.fall_message = fall_message
+        self.horn_message = horn_message
+        self.goto_message = goto_message
 
         if websockets is None:
             self.get_logger().error(
@@ -51,8 +60,10 @@ class WebsocketMusicBridge(Node):
             )
             raise RuntimeError("missing dependency: websockets")
 
-        # ROS service client
+        # ROS service clients
         self._music_client = self.create_client(MusicPlay, "/music_play")
+        self._tts_client = ActionClient(self, TTS, "/say")
+        
         # we don't block here waiting for service; calls will wait or log if not available
 
         # Asyncio loop & thread for websocket
@@ -63,7 +74,7 @@ class WebsocketMusicBridge(Node):
         # Start background thread running asyncio loop
         self._start_background_loop()
 
-        self.get_logger().info(f"WebsocketMusicBridge initialized, target: {self.ws_url}")
+        self.get_logger().info(f"SocketListener initialized, target: {self.ws_url}")
 
     def _start_background_loop(self):
         """asyncio loop in a background daemon thread and websocket main coroutine."""
@@ -73,14 +84,12 @@ class WebsocketMusicBridge(Node):
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
-        # Run the ws_main until cancelled
         try:
             self._loop.run_until_complete(self._ws_main())
         except Exception as e:
-            # If loop stops due to exception, log from node (thread-safe)
             self.get_logger().error(f"Websocket thread exited with exception: {e}")
         finally:
-            # cleanup if needed
+            # cleanup 
             pending = asyncio.all_tasks(loop=self._loop)
             for t in pending:
                 t.cancel()
@@ -97,18 +106,18 @@ class WebsocketMusicBridge(Node):
         while rclpy.ok() and not self._stop_event.is_set():
             try:
                 self.get_logger().info(f"Attempting websocket connect to {self.ws_url}")
-                # timeout and close handling set here; adjust ping_interval/ping_timeout if desired
                 async with websockets.connect(self.ws_url, ping_interval=20, ping_timeout=10) as ws:
-                    self.get_logger().info("Websocket connected, sending subscribe message")
+                    self.get_logger().info("Websocket connected, sending subscribe messages")
                     try:
-                        await ws.send(self.subscribe_message)
+                        for msg in self.subscribe_messages:
+                            await ws.send(msg)
                     except Exception as e:
                         self.get_logger().warn(f"Failed to send subscribe message: {e}")
 
                     # reset backoff on successful connect
                     backoff = 1.0
 
-                    # Listen for messages until the socket closes or we are asked to stop
+                    # listen for messages
                     async for raw_msg in ws:
                         if raw_msg is None:
                             break
@@ -116,20 +125,23 @@ class WebsocketMusicBridge(Node):
                         if not msg:
                             continue
                         self.get_logger().info(f"Websocket received: {msg}")
-                        # react to the expected message (exact match)
-                        if msg == self.expected_message:
-                            # Make a ROS service call (non-blocking)
+                        if msg == self.fall_message:
+                            self.get_logger().info("FALL received")
+                            self._send_tts_goal("new fall")
+                        elif msg.startswith(self.goto_message):
+                            self.get_logger().info("GOTO received")
+                        elif msg == self.horn_message:
+                            self.get_logger().info("HORN received")
                             self._call_music_play("horn")
-                        # else: ignore or extend for other messages
-                    # if we exit the async for, connection closed gracefully
+                        # ignore all other messages
+                    # end of the connection in the websocket
                     self.get_logger().warn("Websocket connection closed, will attempt reconnect")
             except (websockets.ConnectionClosedOK, websockets.ConnectionClosedError) as e:
                 self.get_logger().warn(f"Websocket disconnected: {e}")
             except Exception as e:
-                # network error, DNS, TLS, handshake error, etc.
                 self.get_logger().error(f"Websocket connection error: {e}")
 
-            # If we reach here, we're disconnected -> backoff & retry unless stopping
+            # disconnected -> backoff & retry unless stopping
             if self._stop_event.is_set() or not rclpy.ok():
                 break
             self.get_logger().info(f"Reconnect in {backoff:.1f}s...")
@@ -138,10 +150,51 @@ class WebsocketMusicBridge(Node):
 
         self.get_logger().info("Websocket main coroutine exiting")
 
+    def _send_tts_goal(self, text: str):
+        """
+        Send a TTS goal to the /say action server
+        """
+        # ensure the action server is available (short timeout)
+        if not self._tts_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().warn("/say action server not available (timeout), skipping TTS request")
+            return
+
+        goal_msg = TTS.Goal()
+        goal_msg.text = text
+
+        # send_goal_async returns a future (rclpy Future)
+        send_goal_future = self._tts_client.send_goal_async(goal_msg)
+
+        # attach a callback to handle goal acceptance / result
+        def goal_response_callback(fut):
+            try:
+                goal_handle = fut.result()
+            except Exception as e:
+                self.get_logger().error(f"TTS send_goal failed: {e}")
+                return
+
+            if not goal_handle.accepted:
+                self.get_logger().warn("TTS goal rejected by server")
+                return
+
+            self.get_logger().info("TTS goal accepted, waiting for result...")
+            result_future = goal_handle.get_result_async()
+
+            def result_callback(res_fut):
+                try:
+                    result = res_fut.result().result
+                    # The TTS action result content depends on action definition; log completion
+                    self.get_logger().info("TTS action finished")
+                except Exception as e:
+                    self.get_logger().error(f"TTS action failed: {e}")
+
+            result_future.add_done_callback(result_callback)
+
+        send_goal_future.add_done_callback(goal_response_callback)
+
     def _call_music_play(self, audio_name: str):
         """
         Call the /music_play service asynchronously.
-        This is safe to call from the background (non-ROS) thread.
         """
         if not self._music_client.wait_for_service(timeout_sec=1.0):
             # service not available right now
@@ -151,14 +204,13 @@ class WebsocketMusicBridge(Node):
         req = MusicPlay.Request()
         req.audio = audio_name
 
-        # call_async returns a future handled by rclpy executor (ensure rclpy.spin is running)
+        # call_async returns a future handled by rclpy executor
         future = self._music_client.call_async(req)
 
-        # attach callback to log result when ready
+        # callback, log result when ready
         def _on_response(fut):
             try:
                 resp = fut.result()
-                # MusicPlay usually returns an empty response or success flag depending on service definition
                 self.get_logger().info(f"MusicPlay service call finished for '{audio_name}'")
             except Exception as e:
                 self.get_logger().error(f"MusicPlay service call failed: {e}")
@@ -166,10 +218,8 @@ class WebsocketMusicBridge(Node):
         future.add_done_callback(lambda fut: _on_response(fut))
 
     def destroy_node(self):
-        # signal background websocket loop to stop and close the asyncio loop
         self.get_logger().info("Stopping websocket thread...")
         self._stop_event.set()
-        # attempt graceful loop stop
         if self._loop is not None:
             try:
                 # schedule loop shutdown
@@ -187,13 +237,11 @@ def main(args=None):
 
     node = None
     try:
-        node = WebsocketMusicBridge()
-        # spin() must run to process service futures and keep the node alive
+        node = SocketListener()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        # ensure errors are reported
         if node is not None:
             node.get_logger().error(f"Fatal error: {e}")
         else:
