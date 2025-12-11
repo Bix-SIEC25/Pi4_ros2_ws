@@ -37,6 +37,12 @@ def generate_launch_description():
         emulate_tty=True
     )
 
+    socket_listener = Node(
+        package="online_logger",
+        executable="socket_listener",
+        emulate_tty=True
+    )
+
     watchdog = Node(
         package="watchdog",
         executable="watchdog",
@@ -111,5 +117,6 @@ def generate_launch_description():
     ld.add_action(tts_node)
     ld.add_action(music_node)
     ld.add_action(watchdog)
+    ld.add_action(socket_listener)
 
     return ld
