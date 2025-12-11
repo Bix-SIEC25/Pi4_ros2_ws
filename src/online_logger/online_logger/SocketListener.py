@@ -6,6 +6,9 @@ import time
 import sys
 from typing import Optional
 
+from tf2_ros import Buffer, TransformListener
+import tf_transformations
+
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -102,6 +105,10 @@ class SocketListener(Node):
         self._tts_client = ActionClient(self, TTS, "/say")
         # nav2 service client
         self._client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
+        # get the current position
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
         
         # we don't block here waiting for service; calls will wait or log if not available
 
@@ -400,7 +407,7 @@ class SocketListener(Node):
 
     ############################### STOP ###############################
     
-    def stop_navigation(self):
+    def old_stop_navigation(self):
         gh = getattr(self, '_current_goal_handle', None)
         if gh is None:
             self.get_logger().warn('stop_navigation called but no active goal handle present')
@@ -443,6 +450,74 @@ class SocketListener(Node):
         self._current_goal_handle = None
 
         self.publish_arrived_flag(False)
+        
+    ###### new STOP
+    
+    def stop_navigation(self):
+        gh = getattr(self, "_current_goal_handle", None)
+
+        if gh is None:
+            self._send_to_server("goto", 3, f"No active goal to be stopped")
+            self.get_logger().warn("stop_navigation called but no active goal")
+            self.goal_already_sent = False
+            return
+
+        cancel_future = gh.cancel_goal_async()
+        cancel_future.add_done_callback(self._after_cancel)
+        self._send_to_server("goto", 3, f"Cancel request sent")
+        self.get_logger().info("Sent cancel request to Nav2")
+
+        
+    def _after_cancel(self, future):
+        try:
+            res = future.result()
+            self.get_logger().info(f"Cancel response: {res}")
+        except Exception as e:
+            self.get_logger().error(f"Cancel error: {e}")
+
+        # Reset internal state
+        self.goal_already_sent = False
+        self._current_goal_handle = None
+
+        # Send a dummy goal to robot's current pose to fully reset BT Navigator
+        self.send_goal_to_current_pose()
+
+        
+    def send_goal_to_current_pose(self):
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                "map", 
+                "base_link",
+                rclpy.time.Time()
+            )
+        except Exception as e:
+            self.get_logger().error(f"TF lookup failed: {e}")
+            return
+
+        px = tf.transform.translation.x
+        py = tf.transform.translation.y
+        oz = tf.transform.rotation.z
+        ow = tf.transform.rotation.w
+
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose = PoseStamped()
+        goal_msg.pose.header.frame_id = "map"
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.pose.pose.position.x = px
+        goal_msg.pose.pose.position.y = py
+        goal_msg.pose.pose.orientation.z = oz
+        goal_msg.pose.pose.orientation.w = ow
+
+        self._send_to_server("goto", 3, f"Go where you are ({px:.3f}, {py:.3f})")
+
+        self.get_logger().info(
+            f"Sending dummy goal at current pose ({px:.3f}, {py:.3f})"
+        )
+
+        send_future = self._client.send_goal_async(goal_msg)
+        send_future.add_done_callback(
+            lambda f: self.get_logger().info("Dummy current-pose goal sent")
+        )
         
     ######################################################################
     ######################################################################
