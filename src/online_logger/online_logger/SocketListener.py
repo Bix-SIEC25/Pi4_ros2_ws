@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import math
 import threading
 import asyncio
 import time
@@ -7,7 +8,7 @@ import sys
 from typing import Optional
 
 from tf2_ros import Buffer, TransformListener
-import tf_transformations
+# import tf_transformations
 
 import rclpy
 from rclpy.node import Node
@@ -109,6 +110,10 @@ class SocketListener(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        # stop at arrival
+        self.arrival_distance = 0.10   # 10 cm threshold
+        self._current_goal_xy = None   # (px, py) of active goal
+        self._arrival_sent = False 
         
         # we don't block here waiting for service; calls will wait or log if not available
 
@@ -319,6 +324,10 @@ class SocketListener(Node):
             self._send_to_server("goto", 0, "Nav2 not ready")
             return
 
+        # store goal target and reset arrival flag
+        self._current_goal_xy = (px, py)
+        self._arrival_sent = False
+
         self.goal_already_sent = True
         self.get_logger().info(f'Calling nav2 service with coordinates {px=}, {py=}')
         self._send_to_server("goto", 4, f"New destination ({px=}, {py=})...")
@@ -327,7 +336,6 @@ class SocketListener(Node):
         msg.data = False
         self.arrived_pub.publish(msg)
         
-
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = PoseStamped()
         goal_msg.pose.header.frame_id = 'map'
@@ -335,11 +343,6 @@ class SocketListener(Node):
 
         goal_msg.pose.pose.position.x = px
         goal_msg.pose.pose.position.y = py
-        # goal_msg.pose.pose.position.z = 0.0
-        
-        # goal_msg.pose.pose.orientation.x = 0.0
-        # goal_msg.pose.pose.orientation.y = 0.0
-        # goal_msg.pose.pose.orientation.z = 0.707
         goal_msg.pose.pose.orientation.w = 0.3064
 
         send_goal_future = self._client.send_goal_async(
@@ -348,21 +351,49 @@ class SocketListener(Node):
         )
         send_goal_future.add_done_callback(self.goal_response_callback)
 
+
     def feedback_callback(self, feedback_msg):
-        # Si tu veux loguer la progression, c’est ici
-        feedback = feedback_msg.feedback
-        # self.get_logger().info(f'Feedback: {feedback}')
+        try:
+            feedback = feedback_msg.feedback
+        except Exception:
+            # ignore malformed feedback
+            return
 
-    # def goal_response_callback(self, future):
-    #     goal_handle = future.result()
-    #     if not goal_handle.accepted:
-    #         self.get_logger().error('Rejected goal')
-    #         self.publish_arrived_flag(False)
-    #         return
+        # feedback's current pose if available
+        try:
+            cur = feedback.current_pose.pose.position
+            cur_x = cur.x
+            cur_y = cur.y
+        except Exception:
+            return
 
-    #     self.get_logger().info('Goal accepted')
-    #     result_future = goal_handle.get_result_async()
-    #     result_future.add_done_callback(self.result_callback)
+        if self._current_goal_xy is None:
+            return
+
+        target_x, target_y = self._current_goal_xy
+        dist = math.hypot(target_x - cur_x, target_y - cur_y)
+
+        # If within threshold and we haven't handled arrival yet -> handle it
+        if dist <= self.arrival_distance and not getattr(self, "_arrival_sent", False):
+            self._send_to_server("goto", 2, f"Proximity threshold reached: dist={dist:.3f}m")
+            
+            self.get_logger().info(f"Proximity threshold reached: dist={dist:.3f} m -> treating as arrived")
+            self._arrival_sent = True
+            self.goal_already_sent = False
+            # publish arrival and try to cancel the active goal to stop Nav2
+            self.publish_arrived_flag(True)
+
+            gh = getattr(self, "_current_goal_handle", None)
+            if gh is not None:
+                try:
+                    cancel_future = gh.cancel_goal_async()
+                    cancel_future.add_done_callback(lambda f: self.get_logger().info("Cancel request (arrival) completed"))
+                    self.get_logger().info("Sent cancel request to Nav2 (arrival)")
+                except Exception as e:
+                    self.get_logger().error(f"Failed to send cancel on arrival: {e}")
+            else:
+                self.get_logger().warn("No goal handle to cancel on arrival")
+
 
     def result_callback(self, future):
         result = future.result()
@@ -406,52 +437,6 @@ class SocketListener(Node):
         result_future.add_done_callback(self.result_callback)
 
     ############################### STOP ###############################
-    
-    def old_stop_navigation(self):
-        gh = getattr(self, '_current_goal_handle', None)
-        if gh is None:
-            self.get_logger().warn('stop_navigation called but no active goal handle present')
-            self._send_to_server("goto", 3, f"No active goal to be stopped")
-            # optionally ensure the flag is cleared
-            self.goal_already_sent = False
-            return
-
-        try:
-            cancel_future = gh.cancel_goal_async()
-            cancel_future.add_done_callback(self.cancel_response_callback)
-            self._send_to_server("goto", 3, f"Cancel request send")
-            self.get_logger().info('Cancel request sent to Nav2 action server')
-        except Exception as e:
-            self.get_logger().error(f'Failed to send cancel request: {e}')
-            self._send_to_server("goto", 3, f"Error while stopping nav2 {e}")
-            # clear internal state anyway to allow new goals
-            self.goal_already_sent = False
-            self._current_goal_handle = None
-            
-            self.publish_arrived_flag(False)
-
-    def cancel_response_callback(self, future):
-        try:
-            cancel_response = future.result()
-        except Exception as e:
-            self.get_logger().error(f'Cancel response future raised: {e}')
-            # Reset state to allow new goals
-            self.goal_already_sent = False
-            self._current_goal_handle = None
-            self.publish_arrived_flag(False)
-            return
-
-        rc = getattr(cancel_response, 'return_code', None)
-        accepted = getattr(cancel_response, 'accepted', None)
-        self._send_to_server("goto", 3, f"Stopping response return_code={rc}, {accepted=}")
-        self.get_logger().info(f'Cancel goto response received: return_code={rc}, accepted={accepted}')
-
-        self.goal_already_sent = False
-        self._current_goal_handle = None
-
-        self.publish_arrived_flag(False)
-        
-    ###### new STOP
     
     def stop_navigation(self):
         gh = getattr(self, "_current_goal_handle", None)

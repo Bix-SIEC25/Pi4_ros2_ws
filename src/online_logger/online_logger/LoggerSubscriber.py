@@ -16,7 +16,7 @@ except Exception:
 from interfaces.msg import LogEntry
 
 LEVEL_NAMES = {
-    4: "TRACE",
+    4: "MICASEND",
     3: "DEBUG",
     2: "TRACE",
     1: "WARN",
