@@ -111,7 +111,7 @@ class SocketListener(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # stop at arrival
-        self.arrival_distance = 0.10   # 10 cm threshold
+        self.arrival_distance = 0.20   # 10 cm threshold
         self._current_goal_xy = None   # (px, py) of active goal
         self._arrival_sent = False 
         
