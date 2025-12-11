@@ -91,6 +91,12 @@ def generate_launch_description():
         emulate_tty=True
     )
 
+    music_node = Node(
+        package="audio_common",
+        executable="music_node",
+        emulate_tty=True
+    )
+
     # --- Logical order: RX -> control -> safety -> TX ---
     ld.add_action(joystick_node)
     ld.add_action(joystick_to_cmd_node)
@@ -103,6 +109,7 @@ def generate_launch_description():
     # ld.add_action(system_check_node)
     ld.add_action(audio_player_node)
     ld.add_action(tts_node)
+    ld.add_action(music_node)
     ld.add_action(watchdog)
 
     return ld
