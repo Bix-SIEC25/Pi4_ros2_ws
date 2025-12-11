@@ -97,6 +97,9 @@ private:
   interfaces::msg::MotorsOrder prev_cmd_;
   bool prev_cmd_valid_;
 
+  // To avoid sending several log messages per stop:
+  bool safety_stop_activated = false;
+
   // ---- Utils ----
   static inline int clamp_pwm(int v) { return std::max(0, std::min(100, v)); }
 
@@ -117,13 +120,18 @@ private:
 
     if (d <= d_stop) {
       // zone d’arrêt : PWM = 50 (neutre)
-      std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_front_cm_) +  " {}cm)]";
+      if (not(safety_stop_activated)){
+	  std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_front_cm_) +  " {}cm)]";
+      
       web_logger(4,"safety_stop_node", message);
+	}
+      safety_stop_activated = true;
       return 50;
     }
 
     if (d >= d_slow) {
       // loin : pas de limitation
+      safety_stop_activated = false;
       return pwm_req;
     }
 
@@ -153,12 +161,17 @@ private:
 
     if (d <= d_stop) {
       // zone d’arrêt : PWM = 50 (neutre)
+      if (not(safety_stop_activated)){
       std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING BACKWARD (limit= " + std::to_string(stop_dist_rear_cm_) +  " {}cm)]";
-      return 50;
-    }
+      web_logger(4,"safety_stop_node",message);
+	}
+      safety_stop_activated = true;
+      return 50;}
+	
 
     if (d >= d_slow) {
       // loin : pas de limitation
+      safety_stop_activated = false;
       return pwm_req;
     }
 
@@ -273,8 +286,11 @@ private:
             get_logger(), *get_clock(), 2000,
             "No fresh US data (>%d ms). Hard STOP for safety.",
             us_timeout_ms_);
+	if (not(safety_stop_activated)){
 	web_logger(4,"safety_stop_node",
-		   "safety_stop_node stopping car due to: [ULTRASOUND SENSOR DATA TIMEOUT]");      
+		   "safety_stop_node stopping car due to: [ULTRASOUND SENSOR DATA TIMEOUT]");
+	  }
+	safety_stop_activated = true;
       }
     } else {
       // US OK → clamp dynamique + rampe
@@ -359,8 +375,11 @@ private:
             get_logger(), *get_clock(), 2000,
             "Cmd timeout > %d ms (age=%ld ms): forcing hard STOP.",
             cmd_timeout_ms_, (long)age_ms);
+	if (not(safety_stop_activated)){
 	    web_logger(4,"safety_stop_node",
-		       "safety_stop_node stopping car due to: [WATCHDOG TIMEOUT]");      
+		       "safety_stop_node stopping car due to: [WATCHDOG TIMEOUT]");
+	  }
+	safety_stop_activated = true;
 	
       }
     }
