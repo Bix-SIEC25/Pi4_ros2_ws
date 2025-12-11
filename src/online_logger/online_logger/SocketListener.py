@@ -27,11 +27,22 @@ except Exception as e:
     websockets = None
 
 WS_URL = "wss://magictintin.fr/ws"
-SUBSCRIBE_MSGS = ["bix/wristband:ping", "bix/fall_alert:ping", "micasend:ping"]
+SUBSCRIBE_MSGS = ["bix/wristband:ping", "micasend:ping", "bix/goto:ping"] #, "bix/fall_alert:ping"
 FALL_MESSAGE = "new fall"
 HORN_MESSAGE = "horn"
-GOTO_MESSAGE = "fall>"
+ALRT_MESSAGE = "fall>"
+GOTO_MESSAGE = "goto"
+STOP_MESSAGE = "stopgoto"
 
+def extract_coordinates(input_str):
+    if input_str.startswith("goto"):
+        input_str = input_str[4:]
+
+    x_str, y_str = input_str.split('|')
+    x = float(x_str)
+    y = float(y_str)
+
+    return x, y
 
 class SocketListener(Node):
     def __init__(
@@ -41,6 +52,8 @@ class SocketListener(Node):
         fall_message: str = FALL_MESSAGE,
         horn_message: str = HORN_MESSAGE,
         goto_message: str = GOTO_MESSAGE,
+        alrt_message: str = ALRT_MESSAGE,
+        stop_message: str = STOP_MESSAGE,
     ):
         super().__init__("socket_listener")
         self.ws_url = ws_url
@@ -48,6 +61,8 @@ class SocketListener(Node):
         self.fall_message = fall_message
         self.horn_message = horn_message
         self.goto_message = goto_message
+        self.alrt_message = alrt_message
+        self.stop_message = stop_message
 
         if websockets is None:
             self.get_logger().error(
@@ -136,8 +151,15 @@ class SocketListener(Node):
                         if msg == self.fall_message:
                             self.get_logger().info("FALL received")
                             self._send_tts_goal("new fall")
+                        if msg == self.stop_message:
+                            self.get_logger().info("STOP received")
+                            self.stop_navigation()
                         elif msg.startswith(self.goto_message):
                             self.get_logger().info("GOTO received")
+                            x,y = extract_coordinates(msg)
+                            self.send_goal_once(x,y)
+                        # elif msg.startswith(self.alrt_message):
+                        #     self.get_logger().info("ALERT received")
                         elif msg == self.horn_message:
                             self.get_logger().info("HORN received")
                             self._call_music_play("horn")
@@ -246,6 +268,7 @@ class SocketListener(Node):
     ######################################################################
     ######################################################################
 
+    ############################### START ##############################
 
     def send_goal_once(self, px, py):
         if self.goal_already_sent:
@@ -283,16 +306,16 @@ class SocketListener(Node):
         feedback = feedback_msg.feedback
         # self.get_logger().info(f'Feedback: {feedback}')
 
-    def goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().error('Rejected goal')
-            self.publish_arrived_flag(False)
-            return
+    # def goal_response_callback(self, future):
+    #     goal_handle = future.result()
+    #     if not goal_handle.accepted:
+    #         self.get_logger().error('Rejected goal')
+    #         self.publish_arrived_flag(False)
+    #         return
 
-        self.get_logger().info('Goal accepted')
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self.result_callback)
+    #     self.get_logger().info('Goal accepted')
+    #     result_future = goal_handle.get_result_async()
+    #     result_future.add_done_callback(self.result_callback)
 
     def result_callback(self, future):
         result = future.result()
@@ -311,6 +334,65 @@ class SocketListener(Node):
         msg.data = arrived
         self.arrived_pub.publish(msg)
         self.get_logger().info(f'Arrival published on /car_arrived_to_fall = {arrived}')
+        self.goal_already_sent = False
+        
+    ############################### CBCK ###############################
+    
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('Rejected goal')
+            self.publish_arrived_flag(False)
+            return
+
+        self.get_logger().info('Goal accepted')
+        # store the goal handle so we can cancel later
+        self._current_goal_handle = goal_handle
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.result_callback)
+
+    ############################### STOP ###############################
+    
+    def stop_navigation(self):
+        gh = getattr(self, '_current_goal_handle', None)
+        if gh is None:
+            self.get_logger().warn('stop_navigation called but no active goal handle present')
+            # optionally ensure the flag is cleared
+            self.goal_already_sent = False
+            return
+
+        try:
+            cancel_future = gh.cancel_goal_async()
+            cancel_future.add_done_callback(self.cancel_response_callback)
+            self.get_logger().info('Cancel request sent to Nav2 action server')
+        except Exception as e:
+            self.get_logger().error(f'Failed to send cancel request: {e}')
+            # clear internal state anyway to allow new goals
+            self.goal_already_sent = False
+            self._current_goal_handle = None
+            
+            self.publish_arrived_flag(False)
+
+    def cancel_response_callback(self, future):
+        try:
+            cancel_response = future.result()
+        except Exception as e:
+            self.get_logger().error(f'Cancel response future raised: {e}')
+            # Reset state to allow new goals
+            self.goal_already_sent = False
+            self._current_goal_handle = None
+            self.publish_arrived_flag(False)
+            return
+
+        rc = getattr(cancel_response, 'return_code', None)
+        accepted = getattr(cancel_response, 'accepted', None)
+        self.get_logger().info(f'Cancel goto response received: return_code={rc}, accepted={accepted}')
+
+        self.goal_already_sent = False
+        self._current_goal_handle = None
+
+        self.publish_arrived_flag(False)
         
     ######################################################################
     ######################################################################
