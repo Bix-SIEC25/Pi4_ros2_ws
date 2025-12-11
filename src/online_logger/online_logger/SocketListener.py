@@ -201,6 +201,11 @@ class SocketListener(Node):
                             x,y = extract_coordinates(msg)
                             self._send_to_server("socket", 3, f"GOTO received {x=} {y=}")
                             self.send_goal_once(x,y)
+                        elif msg.startswith("tts>"):
+                            self.get_logger().info("TTS received")
+                            message_to_tts = msg[4:]
+                            self._send_to_server("tts", 3, f"TTS: {message_to_tts}")
+                            self._send_tts_goal(message_to_tts)
                         # elif msg.startswith(self.alrt_message):
                         #     self.get_logger().info("ALERT received")
                         elif msg == self.horn_message:
