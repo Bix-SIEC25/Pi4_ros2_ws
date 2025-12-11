@@ -20,6 +20,30 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
 
 
+import concurrent.futures
+import urllib.parse
+import urllib.request
+import ssl
+
+try:
+    import requests  # type: ignore
+    HAS_REQUESTS = True
+except Exception:
+    HAS_REQUESTS = False
+
+from interfaces.msg import LogEntry
+
+LEVEL_NAMES = {
+    4: "TRACE",
+    3: "DEBUG",
+    2: "TRACE",
+    1: "WARN",
+    0: "ERROR"
+}
+
+SERVER_BASE = "https://bix.ovh/add_log"
+HTTP_TIMEOUT = 5  # seconds
+
 # websocket client lib
 try:
     import websockets
@@ -136,6 +160,10 @@ class SocketListener(Node):
                             await ws.send(msg)
                     except Exception as e:
                         self.get_logger().warn(f"Failed to send subscribe message: {e}")
+                        self._send_to_server("listener", 0, "Error while subscribing to groups")
+                        
+                        
+                    self._send_to_server("listener", 3, "Subscribed to groups")
 
                     # reset backoff on successful connect
                     backoff = 1.0
@@ -150,13 +178,16 @@ class SocketListener(Node):
                         self.get_logger().info(f"Websocket received: {msg}")
                         if msg == self.fall_message:
                             self.get_logger().info("FALL received")
+                            self._send_to_server("socket", 3, "Fall received")
                             self._send_tts_goal("new fall")
                         if msg == self.stop_message:
                             self.get_logger().info("STOP received")
+                            self._send_to_server("socket", 3, "Stop received")
                             self.stop_navigation()
                         elif msg.startswith(self.goto_message):
                             self.get_logger().info("GOTO received")
                             x,y = extract_coordinates(msg)
+                            self._send_to_server("socket", 3, f"GOTO received {x=} {y=}")
                             self.send_goal_once(x,y)
                         # elif msg.startswith(self.alrt_message):
                         #     self.get_logger().info("ALERT received")
@@ -272,14 +303,19 @@ class SocketListener(Node):
 
     def send_goal_once(self, px, py):
         if self.goal_already_sent:
-            return
+            self.get_logger().warn('ALREADY IN NAVIGATION (ignoring)')
+            self._send_to_server("goto", 1, "Ignoring new goal")
+            #return # FIXME:
 
         if not self._client.wait_for_server(timeout_sec=1.0):
             self.get_logger().warn('Nav2 still not ready')
+            self._send_to_server("goto", 0, "Nav2 not ready")
             return
 
         self.goal_already_sent = True
         self.get_logger().info(f'Calling nav2 service with coordinates {px=}, {py=}')
+        self._send_to_server("goto", 4, f"New destination ({px=}, {py=})...")
+        
 
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = PoseStamped()
@@ -323,16 +359,20 @@ class SocketListener(Node):
 
         # STATUS_SUCCEEDED = 4
         if status == 4:
-            self.get_logger().info('CAR IS ARRIVED')
+            self.get_logger().info('CAR ARRIVED')
+            self._send_to_server("goto", 3, "Car arrived")
             self.publish_arrived_flag(True)
         else:
             self.get_logger().warn(f'GOAL ENDED with status={status}')
+            self._send_to_server("goto", 1, f"Goal ended with {status=}")
             self.publish_arrived_flag(False)
 
     def publish_arrived_flag(self, arrived: bool):
         msg = Bool()
         msg.data = arrived
         self.arrived_pub.publish(msg)
+        self._send_to_server("goto", 3, f"Arrival flag {arrived=}")
+        
         self.get_logger().info(f'Arrival published on /car_arrived_to_fall = {arrived}')
         self.goal_already_sent = False
         
@@ -342,9 +382,11 @@ class SocketListener(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().error('Rejected goal')
+            self._send_to_server("goto", 1, f"Rejected goal")
             self.publish_arrived_flag(False)
             return
 
+        self._send_to_server("goto", 2, f"Goal accepted")
         self.get_logger().info('Goal accepted')
         # store the goal handle so we can cancel later
         self._current_goal_handle = goal_handle
@@ -358,6 +400,7 @@ class SocketListener(Node):
         gh = getattr(self, '_current_goal_handle', None)
         if gh is None:
             self.get_logger().warn('stop_navigation called but no active goal handle present')
+            self._send_to_server("goto", 3, f"No active goal to be stopped")
             # optionally ensure the flag is cleared
             self.goal_already_sent = False
             return
@@ -365,9 +408,11 @@ class SocketListener(Node):
         try:
             cancel_future = gh.cancel_goal_async()
             cancel_future.add_done_callback(self.cancel_response_callback)
+            self._send_to_server("goto", 3, f"Cancel request send")
             self.get_logger().info('Cancel request sent to Nav2 action server')
         except Exception as e:
             self.get_logger().error(f'Failed to send cancel request: {e}')
+            self._send_to_server("goto", 3, f"Error while stopping nav2 {e}")
             # clear internal state anyway to allow new goals
             self.goal_already_sent = False
             self._current_goal_handle = None
@@ -387,6 +432,7 @@ class SocketListener(Node):
 
         rc = getattr(cancel_response, 'return_code', None)
         accepted = getattr(cancel_response, 'accepted', None)
+        self._send_to_server("goto", 3, f"Stopping response return_code={rc}, {accepted=}")
         self.get_logger().info(f'Cancel goto response received: return_code={rc}, accepted={accepted}')
 
         self.goal_already_sent = False
@@ -396,9 +442,32 @@ class SocketListener(Node):
         
     ######################################################################
     ######################################################################
-    ######################## DESTROY NODE & MAIN ########################
+    ###################### DESTROY OWN SENDER & MAIN #####################
     ######################################################################
     ######################################################################
+    
+    def _send_to_server(self, sender: str, level: int, message: str) -> None:
+        # Build params and URL-encode them
+        params = {'sender': sender, 'type': level, 'msg': message}
+        query = urllib.parse.urlencode(params, safe='')
+        url = f"{SERVER_BASE}?{query}"
+
+        try:
+            if HAS_REQUESTS:
+                # requests package
+                resp = requests.get(SERVER_BASE, params=params, timeout=HTTP_TIMEOUT)
+                status = resp.status_code
+                text_preview = resp.text[:200]  # crop
+                self.get_logger().info(f"Sent to server ({status}) - preview: {text_preview}")
+            else:
+                # urllib fallback
+                req = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT, context=self._ssl_context) as resp:
+                    body = resp.read(200)  #crop
+                    status = resp.getcode()
+                    self.get_logger().info(f"Sent to server ({status}) - preview: {body!r}")
+        except Exception as e:
+            self.get_logger().error(f"Error sending log to server for sender='{sender}': {e}")
     
     def destroy_node(self):
         self.get_logger().info("Stopping websocket thread...")
