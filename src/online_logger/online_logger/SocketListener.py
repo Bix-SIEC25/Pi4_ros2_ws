@@ -305,7 +305,7 @@ class SocketListener(Node):
         if self.goal_already_sent:
             self.get_logger().warn('ALREADY IN NAVIGATION (ignoring)')
             self._send_to_server("goto", 1, "Ignoring new goal")
-            #return # FIXME:
+            return
 
         if not self._client.wait_for_server(timeout_sec=1.0):
             self.get_logger().warn('Nav2 still not ready')
@@ -315,6 +315,10 @@ class SocketListener(Node):
         self.goal_already_sent = True
         self.get_logger().info(f'Calling nav2 service with coordinates {px=}, {py=}')
         self._send_to_server("goto", 4, f"New destination ({px=}, {py=})...")
+        
+        msg = Bool()
+        msg.data = False
+        self.arrived_pub.publish(msg)
         
 
         goal_msg = NavigateToPose.Goal()
