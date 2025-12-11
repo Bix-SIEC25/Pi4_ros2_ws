@@ -4,6 +4,7 @@
 #include "interfaces/msg/log_entry.hpp"
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 using std::placeholders::_1;
 using namespace std::chrono_literals;
@@ -103,8 +104,61 @@ private:
   // ---- Utils ----
   static inline int clamp_pwm(int v) { return std::max(0, std::min(100, v)); }
 
+  const int int_max = std::numeric_limits<int>::max(); // used in fucntion smallest_us()
+
+  
+  enum us_direction_t{
+    LEFT,
+    MIDDLE,
+    RIGHT,
+  };
+
+  //stores the readout value AND direction of an ultrasound measurement
+  struct us_readout_t{
+    int us_value;
+    us_direction_t direction;
+  };
+
+  //From a us readout message and forward/backward direction indication, returns the value and direction (left/middle/right) of the smallest readout
+  us_readout_t smallest_us(const interfaces::msg::Ultrasonic &msg, bool forward){
+    us_direction_t direction;
+    int retval;
+    int left;
+    int right;
+    int middle;
+
+    if (forward){
+      left = msg.front_left;
+      middle = msg.front_center;
+      right = msg.front_right;
+    }
+    else{
+      left = msg.rear_left;
+      middle = msg.rear_center;
+      right = msg.rear_right;
+    }
+
+    int smallest = int_max;
+
+    if (left < smallest){
+      retval = left;
+      direction = LEFT;
+    }
+    if (middle < smallest){
+      retval = middle;
+      direction = MIDDLE;
+    }
+    if (right < smallest){
+      retval = right;
+      direction = RIGHT;
+    }
+
+    return {retval, direction};
+  }
+    
+
   // Clamp forward : on limite l'amplitude vers 100 (PWM > 50)
-  int computeClampedPwmForward(int pwm_req, int d, int d_stop, int d_slow) {
+  int computeClampedPwmForward(int pwm_req, int d, int d_stop, int d_slow, bool *stopped /*used to indicate if the clamp function stopped the car*/) {
     pwm_req = clamp_pwm(pwm_req);
 
     if (d < 0) {
@@ -120,12 +174,7 @@ private:
 
     if (d <= d_stop) {
       // zone d’arrêt : PWM = 50 (neutre)
-      if (not(safety_stop_activated)){
-	  std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_front_cm_) +  " {}cm)]";
-      
-      web_logger(4,"safety_stop_node", message);
-	}
-      safety_stop_activated = true;
+	  *stopped = true;
       return 50;
     }
 
@@ -162,7 +211,7 @@ private:
     if (d <= d_stop) {
       // zone d’arrêt : PWM = 50 (neutre)
       if (not(safety_stop_activated)){
-      std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING BACKWARD (limit= " + std::to_string(stop_dist_rear_cm_) +  " {}cm)]";
+      std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING BACKWARD (limit= " + std::to_string(stop_dist_rear_cm_) +  "cm)]";
       web_logger(4,"safety_stop_node",message);
 	}
       safety_stop_activated = true;
@@ -295,25 +344,46 @@ private:
     } else {
       // US OK → clamp dynamique + rampe
       if (forward) {
-        int d = std::min({last_us_.front_left,
-                          last_us_.front_center,
-                          last_us_.front_right});
+		us_readout_t small_us = smallest_us(last_us_, /*forwards=*/true);
 
+		bool stopped = false;
         int l = computeClampedPwmForward(safe.left_rear_pwm,
-                                         d,
+                                         small_us.us_value,
                                          stop_dist_front_cm_,
-                                         slow_dist_front_cm_);
+                                         slow_dist_front_cm_,
+										 &stopped);
         int r = computeClampedPwmForward(safe.right_rear_pwm,
-                                         d,
+                                         small_us.us_value,
                                          stop_dist_front_cm_,
-                                         slow_dist_front_cm_);
+                                         slow_dist_front_cm_,
+										 &stopped);
         safe.left_rear_pwm  = l;
         safe.right_rear_pwm = r;
+
+		std::string dir_message;
+		if (stopped){
+				switch (small_us.direction){
+						case LEFT:
+								dir_message = "LEFT";
+								break;
+						case MIDDLE:
+								dir_message = "MIDDLE";
+								break;
+						case RIGHT:
+								dir_message = "RIGHT";
+								break;
+				}
+
+				if (log_actions_ && not(safety_stop_activated)){
+						web_logger(4,"safety_stop_node","safety_stop_node stopping car due to: [ULTRASOUND FRONT " + dir_message + " DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_rear_cm_) + "cm)]" );
+				}
+				safety_stop_activated = true;
+		}
 
         if (log_actions_) {
           RCLCPP_DEBUG(get_logger(),
                        "Forward: d=%d cm, pwm_req=(%d,%d) -> clamp=(%d,%d)",
-                       d,
+                       small_us.us_value,
                        raw.left_rear_pwm, raw.right_rear_pwm,
                        safe.left_rear_pwm, safe.right_rear_pwm);
         }
