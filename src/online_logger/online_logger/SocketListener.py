@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-ws_music_bridge.py
-
-Connect to wss://server.org/ws, send "subscribe:horn" on each connection,
-and when receiving the message "horn" call the /music_play service:
-  ros2 service call /music_play audio_common_msgs/srv/MusicPlay "{audio: 'horn'}"
-
-Requirements:
-  pip3 install websockets
-"""
 
 import threading
 import asyncio
@@ -23,6 +13,11 @@ from rclpy.action import ActionClient
 # Service type
 from audio_common_msgs.srv import MusicPlay
 from audio_common_msgs.action import TTS
+
+
+from nav2_msgs.action import NavigateToPose
+from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Bool
 
 
 # websocket client lib
@@ -47,7 +42,7 @@ class SocketListener(Node):
         horn_message: str = HORN_MESSAGE,
         goto_message: str = GOTO_MESSAGE,
     ):
-        super().__init__("ws_music_bridge")
+        super().__init__("socket_listener")
         self.ws_url = ws_url
         self.subscribe_messages = subscribe_messages
         self.fall_message = fall_message
@@ -60,9 +55,14 @@ class SocketListener(Node):
             )
             raise RuntimeError("missing dependency: websockets")
 
+        # publish on this topic
+        self.arrived_pub = self.create_publisher(Bool, '/car_arrived_to_fall', 10)
+        
         # ROS service clients
         self._music_client = self.create_client(MusicPlay, "/music_play")
         self._tts_client = ActionClient(self, TTS, "/say")
+        # nav2 service client
+        self._client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
         
         # we don't block here waiting for service; calls will wait or log if not available
 
@@ -71,8 +71,10 @@ class SocketListener(Node):
         self._ws_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
+        self.goal_already_sent = False
         # Start background thread running asyncio loop
         self._start_background_loop()
+        
 
         self.get_logger().info(f"SocketListener initialized, target: {self.ws_url}")
 
@@ -98,6 +100,12 @@ class SocketListener(Node):
             except Exception:
                 pass
             self._loop.close()
+    
+    ######################################################################
+    ######################################################################
+    ############################ MAIN WS LOOP ############################
+    ######################################################################
+    ######################################################################
 
     async def _ws_main(self):
         """main reconnection loop. On each connection send subscribe_message and process incoming messages."""
@@ -150,6 +158,13 @@ class SocketListener(Node):
 
         self.get_logger().info("Websocket main coroutine exiting")
 
+    
+    ######################################################################
+    ######################################################################
+    ############################## TTS GOAL ##############################
+    ######################################################################
+    ######################################################################
+    
     def _send_tts_goal(self, text: str):
         """
         Send a TTS goal to the /say action server
@@ -191,6 +206,13 @@ class SocketListener(Node):
             result_future.add_done_callback(result_callback)
 
         send_goal_future.add_done_callback(goal_response_callback)
+        
+    
+    ######################################################################
+    ######################################################################
+    ############################# MUSIC GOAL #############################
+    ######################################################################
+    ######################################################################
 
     def _call_music_play(self, audio_name: str):
         """
@@ -216,7 +238,86 @@ class SocketListener(Node):
                 self.get_logger().error(f"MusicPlay service call failed: {e}")
 
         future.add_done_callback(lambda fut: _on_response(fut))
+        
+    
+    ######################################################################
+    ######################################################################
+    ############################# NAV 2 GOAL #############################
+    ######################################################################
+    ######################################################################
 
+
+    def send_goal_once(self, px, py):
+        if self.goal_already_sent:
+            return
+
+        if not self._client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().warn('Nav2 still not ready')
+            return
+
+        self.goal_already_sent = True
+        self.get_logger().info(f'Calling nav2 service with coordinates {px=}, {py=}')
+
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose = PoseStamped()
+        goal_msg.pose.header.frame_id = 'map'
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+
+        goal_msg.pose.pose.position.x = px
+        goal_msg.pose.pose.position.y = py
+        # goal_msg.pose.pose.position.z = 0.0
+        
+        # goal_msg.pose.pose.orientation.x = 0.0
+        # goal_msg.pose.pose.orientation.y = 0.0
+        # goal_msg.pose.pose.orientation.z = 0.707
+        goal_msg.pose.pose.orientation.w = 0.3064
+
+        send_goal_future = self._client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.feedback_callback
+        )
+        send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def feedback_callback(self, feedback_msg):
+        # Si tu veux loguer la progression, c’est ici
+        feedback = feedback_msg.feedback
+        # self.get_logger().info(f'Feedback: {feedback}')
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('Rejected goal')
+            self.publish_arrived_flag(False)
+            return
+
+        self.get_logger().info('Goal accepted')
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.result_callback)
+
+    def result_callback(self, future):
+        result = future.result()
+        status = result.status
+
+        # STATUS_SUCCEEDED = 4
+        if status == 4:
+            self.get_logger().info('CAR IS ARRIVED')
+            self.publish_arrived_flag(True)
+        else:
+            self.get_logger().warn(f'GOAL ENDED with status={status}')
+            self.publish_arrived_flag(False)
+
+    def publish_arrived_flag(self, arrived: bool):
+        msg = Bool()
+        msg.data = arrived
+        self.arrived_pub.publish(msg)
+        self.get_logger().info(f'Arrival published on /car_arrived_to_fall = {arrived}')
+        
+    ######################################################################
+    ######################################################################
+    ######################## DESTROY NODE & MAIN ########################
+    ######################################################################
+    ######################################################################
+    
     def destroy_node(self):
         self.get_logger().info("Stopping websocket thread...")
         self._stop_event.set()
