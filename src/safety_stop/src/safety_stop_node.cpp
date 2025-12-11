@@ -127,6 +127,8 @@ private:
     int right;
     int middle;
 
+    us_readout_t result;
+
     if (forward){
       left = msg.front_left;
       middle = msg.front_center;
@@ -141,19 +143,26 @@ private:
     int smallest = int_max;
 
     if (left < smallest){
+      smallest = left;
       retval = left;
       direction = LEFT;
     }
     if (middle < smallest){
+      smallest = middle;
       retval = middle;
       direction = MIDDLE;
     }
     if (right < smallest){
+      smallest = right;
       retval = right;
       direction = RIGHT;
     }
 
-    return {retval, direction};
+    result.us_value = retval;
+    result.direction = direction;
+
+    return result;
+
   }
     
 
@@ -212,7 +221,7 @@ private:
       // zone d’arrêt : PWM = 50 (neutre)
       if (not(safety_stop_activated)){
       std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING BACKWARD (limit= " + std::to_string(stop_dist_rear_cm_) +  "cm)]";
-      web_logger(4,"safety_stop_node",message);
+      web_logger(2,"safety_stop_node",message);
 	}
       safety_stop_activated = true;
       return 50;}
@@ -336,7 +345,7 @@ private:
             "No fresh US data (>%d ms). Hard STOP for safety.",
             us_timeout_ms_);
 	if (not(safety_stop_activated)){
-	web_logger(4,"safety_stop_node",
+	web_logger(2,"safety_stop_node",
 		   "safety_stop_node stopping car due to: [ULTRASOUND SENSOR DATA TIMEOUT]");
 	  }
 	safety_stop_activated = true;
@@ -375,7 +384,7 @@ private:
 				}
 
 				if (log_actions_ && not(safety_stop_activated)){
-						web_logger(4,"safety_stop_node","safety_stop_node stopping car due to: [ULTRASOUND FRONT " + dir_message + " DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_rear_cm_) + "cm)]" );
+						web_logger(2,"safety_stop_node","safety_stop_node stopping car due to: [ULTRASOUND FRONT " + dir_message + " DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_rear_cm_) + "cm)]" );
 				}
 				safety_stop_activated = true;
 		}
@@ -446,7 +455,7 @@ private:
             "Cmd timeout > %d ms (age=%ld ms): forcing hard STOP.",
             cmd_timeout_ms_, (long)age_ms);
 	if (not(safety_stop_activated)){
-	    web_logger(4,"safety_stop_node",
+	    web_logger(2,"safety_stop_node",
 		       "safety_stop_node stopping car due to: [WATCHDOG TIMEOUT]");
 	  }
 	safety_stop_activated = true;
