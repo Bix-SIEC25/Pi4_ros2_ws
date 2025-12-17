@@ -429,7 +429,7 @@ private:
 				}
 
 				if (log_actions_ && not(safety_stop_activated)){
-						web_logger(2,"safety_stop_node","safety_stop_node stopping car due to: [ULTRASOUND REAR " + dir_message + " DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_rear_cm_) + "cm)]" );
+						web_logger(2,"safety_stop_node","safety_stop_node stopping car due to: [ULTRASOUND REAR " + dir_message + " DETECTED OBJECT TOO CLOSE WHILE MOVING BACKWARD (limit= " + std::to_string(stop_dist_rear_cm_) + "cm)]" );
 				}
 				safety_stop_activated = true;
 		}
