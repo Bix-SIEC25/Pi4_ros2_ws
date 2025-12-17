@@ -37,6 +37,12 @@ def generate_launch_description():
         emulate_tty=True
     )
 
+    image_sender = Node(
+        package="online_logger",
+        executable="image_sender",
+        emulate_tty=True
+    )
+
     socket_listener = Node(
         package="online_logger",
         executable="socket_listener",
@@ -118,5 +124,6 @@ def generate_launch_description():
     ld.add_action(music_node)
     ld.add_action(watchdog)
     ld.add_action(socket_listener)
+    ld.add_action(image_sender)
 
     return ld
