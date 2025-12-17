@@ -165,7 +165,6 @@ private:
 
   }
     
-
   // Clamp forward : on limite l'amplitude vers 100 (PWM > 50)
   int computeClampedPwmForward(int pwm_req, int d, int d_stop, int d_slow, bool *stopped /*used to indicate if the clamp function stopped the car*/) {
     pwm_req = clamp_pwm(pwm_req);
@@ -183,7 +182,7 @@ private:
 
     if (d <= d_stop) {
       // zone d’arrêt : PWM = 50 (neutre)
-	  *stopped = true;
+      *stopped = true;
       return 50;
     }
 
@@ -203,7 +202,7 @@ private:
   }
 
   // Clamp backward : on limite l'amplitude vers 0 (PWM < 50)
-  int computeClampedPwmBackward(int pwm_req, int d, int d_stop, int d_slow) {
+  int computeClampedPwmBackward(int pwm_req, int d, int d_stop, int d_slow, bool *stopped /*used to indicate if the clamp function stopped the car*/) {
     pwm_req = clamp_pwm(pwm_req);
 
     if (d < 0) {
@@ -219,11 +218,7 @@ private:
 
     if (d <= d_stop) {
       // zone d’arrêt : PWM = 50 (neutre)
-      if (not(safety_stop_activated)){
-      std::string message = "safety_stop_node stopping car due to: [ULTRASOUND DETECTED OBJECT TOO CLOSE WHILE MOVING BACKWARD (limit= " + std::to_string(stop_dist_rear_cm_) +  "cm)]";
-      web_logger(2,"safety_stop_node",message);
-	}
-      safety_stop_activated = true;
+      *stopped = true;
       return 50;}
 	
 
@@ -401,17 +396,45 @@ private:
                           last_us_.rear_center,
                           last_us_.rear_right});
 
+	us_readout_t small_us = smallest_us(last_us_, /*forwards=*/false);
+
+	bool stopped = false;
+
         int l = computeClampedPwmBackward(safe.left_rear_pwm,
-                                          d,
+                                          small_us.us_value,
                                           stop_dist_rear_cm_,
-                                          slow_dist_rear_cm_);
+                                          slow_dist_rear_cm_,
+					  &stopped);
         int r = computeClampedPwmBackward(safe.right_rear_pwm,
-                                          d,
+                                          small_us.us_value,
                                           stop_dist_rear_cm_,
-                                          slow_dist_rear_cm_);
+                                          slow_dist_rear_cm_,
+					  &stopped);
         safe.left_rear_pwm  = l;
         safe.right_rear_pwm = r;
 
+	
+		std::string dir_message;
+		if (stopped){
+				switch (small_us.direction){
+						case LEFT:
+								dir_message = "LEFT";
+								break;
+						case MIDDLE:
+								dir_message = "MIDDLE";
+								break;
+						case RIGHT:
+								dir_message = "RIGHT";
+								break;
+				}
+
+				if (log_actions_ && not(safety_stop_activated)){
+						web_logger(2,"safety_stop_node","safety_stop_node stopping car due to: [ULTRASOUND REAR " + dir_message + " DETECTED OBJECT TOO CLOSE WHILE MOVING FORWARD (limit= " + std::to_string(stop_dist_rear_cm_) + "cm)]" );
+				}
+				safety_stop_activated = true;
+		}
+
+	
         if (log_actions_) {
           RCLCPP_DEBUG(get_logger(),
                        "Backward: d=%d cm, pwm_req=(%d,%d) -> clamp=(%d,%d)",
