@@ -16,6 +16,10 @@ import requests
 class ImageSender(Node):
     def __init__(self):
         super().__init__('image_sender')
+        
+        file = open("/home/pi/.bin/sek", "r")
+        self.sek = file.read()
+        file.close()
 
         self.declare_parameter('min_interval_sec', 2)  # minimum seconds between HTTP uploads (rate limiting)
         self.declare_parameter('verify_ssl', True)     # verify SSL certificates by default
@@ -71,6 +75,7 @@ class ImageSender(Node):
             data = {}
             if timestamp is not None:
                 data['timestamp'] = f'{timestamp:.6f}'
+            data['popop'] = self.sek
                 
             self.get_logger().debug('Posting image to server...')
             resp = requests.post(self.server_url, files=files, data=data, timeout=8, verify=self.verify_ssl)
