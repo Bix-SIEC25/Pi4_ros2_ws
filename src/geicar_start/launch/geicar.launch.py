@@ -122,8 +122,8 @@ def generate_launch_description():
     ld.add_action(audio_player_node)
     ld.add_action(tts_node)
     ld.add_action(music_node)
-    ld.add_action(watchdog)
+    #ld.add_action(watchdog)
     ld.add_action(socket_listener)
-    ld.add_action(image_sender)
+    #ld.add_action(image_sender)
 
     return ld
