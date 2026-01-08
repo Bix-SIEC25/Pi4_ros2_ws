@@ -20,8 +20,9 @@ class ImageSender(Node):
     def __init__(self):
         super().__init__('image_sender')
 
+        # read secret token once
         try:
-            with open("/home/pi/.bin/sek", "r") as f: # scret for image sending
+            with open("/home/pi/.bin/sek", "r") as f:
                 self.sek = f.read().strip()
         except Exception as e:
             self.get_logger().error(f'Failed to read secret file: {e}')
@@ -37,21 +38,30 @@ class ImageSender(Node):
         self.verify_ssl = bool(self.get_parameter('verify_ssl')
                                .get_parameter_value().bool_value)
 
+        # upload target
         self.server_url = "https://bix.ovh/cam"
 
         # small bounded queue to hold latest frame for upload (drop older)
         self._queue: "queue.Queue[Tuple[bytes, Optional[float]]]" = queue.Queue(maxsize=1)
 
-        # rate monotonic
+        # last send time (monotonic)
         self._last_send_time = 0.0
         self._lock = threading.Lock()
+
+        # create a requests.Session for connection reuse BEFORE starting the uploader thread
+        # (session will be used only by the uploader thread)
+        try:
+            self._session = requests.Session()
+        except Exception as e:
+            self.get_logger().warning(f'Failed to create requests Session: {e}')
+            self._session = None
 
         # uploader thread control
         self._running = True
         self._uploader_thread = threading.Thread(target=self._uploader_loop, daemon=True)
         self._uploader_thread.start()
 
-        # optional status publisher (recreate if needed)
+        # optional status publisher
         self.status_pub = self.create_publisher(String, '/image_sender/status', 10)
 
         # subscribe
@@ -65,9 +75,6 @@ class ImageSender(Node):
         self.get_logger().info(f'ImageSender started. Will POST to {self.server_url} '
                                f'(min_interval={self.min_interval}s, verify_ssl={self.verify_ssl})')
 
-        # create a requests.Session for connection reuse (thread-safe for our use: used only by uploader thread)
-        self._session = requests.Session()
-
     def image_callback(self, msg: CompressedImage):
         # if message empty, ignore
         if not msg.data:
@@ -76,13 +83,13 @@ class ImageSender(Node):
         now = time.monotonic()
         with self._lock:
             if now - self._last_send_time < self.min_interval:
-                # too soon
+                # too soon — skip (do no heavy work)
                 return
             # reserve the slot immediately so other callbacks will skip until we accept this frame
             self._last_send_time = now
 
         # zero-copy: pass msg.data directly (it's bytes/bytearray)
-        jpeg_data = msg.data  # NO BYTE CALL HERE it slow down everything
+        jpeg_data = msg.data  # do NOT call bytes(...) here
 
         # compute timestamp if available (wall time approximation)
         timestamp = None
@@ -109,7 +116,16 @@ class ImageSender(Node):
 
     def _uploader_loop(self):
         """Background thread: consumes latest frames from queue and uploads them."""
-        session = self._session
+        # defensive: ensure we have a session even if __init__ didn't set it for some reason
+        session = getattr(self, '_session', None)
+        if session is None:
+            try:
+                session = requests.Session()
+                self._session = session
+            except Exception as e:
+                self.get_logger().warning(f'Uploader thread could not create Session(): {e}')
+                session = None
+
         while self._running and rclpy.ok():
             try:
                 item = self._queue.get(timeout=0.5)  # wait for a frame
@@ -120,7 +136,7 @@ class ImageSender(Node):
                 continue
             jpeg_bytes, timestamp = item
 
-            # pass without copy
+            # Build multipart form: we pass jpeg_bytes directly (no copy)
             files = {
                 'image': ('frame.jpg', jpeg_bytes, 'image/jpeg'),
             }
@@ -131,21 +147,43 @@ class ImageSender(Node):
 
             try:
                 # perform HTTP POST (single Session reused)
-                resp = session.post(self.server_url, files=files, data=data,
-                                    timeout=8, verify=self.verify_ssl)
+                if session is None:
+                    # fallback to simple post if session creation failed earlier
+                    resp = requests.post(self.server_url, files=files, data=data,
+                                         timeout=8, verify=self.verify_ssl)
+                else:
+                    resp = session.post(self.server_url, files=files, data=data,
+                                        timeout=8, verify=self.verify_ssl)
+
                 if resp.status_code == 200:
                     self.get_logger().info('Image uploaded successfully '
                                            f'(response {len(resp.content)} bytes)')
+                    try:
+                        self.status_pub.publish(String(data='uploaded'))
+                    except Exception:
+                        pass
                 else:
                     self.get_logger().warning(f'Upload failed: HTTP {resp.status_code}')
+                    try:
+                        self.status_pub.publish(String(data=f'upload_failed:{resp.status_code}'))
+                    except Exception:
+                        pass
             except requests.RequestException as e:
                 # common network exceptions
                 self.get_logger().warning(f'Network error during upload: {e}')
+                try:
+                    self.status_pub.publish(String(data='upload_exception'))
+                except Exception:
+                    pass
             except Exception as e:
                 # unexpected exception
                 self.get_logger().error(f'Unexpected exception in uploader: {e}')
+                try:
+                    self.status_pub.publish(String(data='upload_exception'))
+                except Exception:
+                    pass
             finally:
-                # ensure we mark task done (queue.get() used without task_done here)
+                # continue to next item
                 pass
 
     def close(self):
@@ -162,7 +200,8 @@ class ImageSender(Node):
         if self._uploader_thread.is_alive():
             self._uploader_thread.join(timeout=2.0)
         try:
-            self._session.close()
+            if getattr(self, '_session', None) is not None:
+                self._session.close()
         except Exception:
             pass
 
