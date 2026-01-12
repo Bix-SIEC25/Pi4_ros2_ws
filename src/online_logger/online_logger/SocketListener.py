@@ -55,12 +55,14 @@ except Exception as e:
     websockets = None
 
 WS_URL = "wss://magictintin.fr/ws"
-SUBSCRIBE_MSGS = ["bix/wristband:ping", "micasend:ping", "bix/goto:ping"] #, "bix/fall_alert:ping"
+SUBSCRIBE_MSGS = ["bix/wristband:ping", "micasend:ping", "bix/goto:ping", "bix/admin:ping"] #, "bix/fall_alert:ping"
 FALL_MESSAGE = "new fall"
 HORN_MESSAGE = "horn"
 ALRT_MESSAGE = "fall>"
 GOTO_MESSAGE = "goto"
 STOP_MESSAGE = "stopgoto"
+ACNF_MESSAGE = "fallconfirmed"
+ADNY_MESSAGE = "falldenied"
 
 def extract_coordinates(input_str):
     if input_str.startswith("goto"):
@@ -82,6 +84,8 @@ class SocketListener(Node):
         goto_message: str = GOTO_MESSAGE,
         alrt_message: str = ALRT_MESSAGE,
         stop_message: str = STOP_MESSAGE,
+        acnf_message: str = ACNF_MESSAGE,
+        adny_message: str = ADNY_MESSAGE,
     ):
         super().__init__("socket_listener")
         self.ws_url = ws_url
@@ -91,6 +95,8 @@ class SocketListener(Node):
         self.goto_message = goto_message
         self.alrt_message = alrt_message
         self.stop_message = stop_message
+        self.acnf_message = acnf_message
+        self.adny_message = adny_message
 
         if websockets is None:
             self.get_logger().error(
@@ -98,8 +104,9 @@ class SocketListener(Node):
             )
             raise RuntimeError("missing dependency: websockets")
 
-        # publish on this topic
+        # publish 
         self.arrived_pub = self.create_publisher(Bool, '/car_arrived_to_fall', 10)
+        self.image_verified_pub = self.create_publisher(Bool, '/image_verified', 10)
         
         # ROS service clients
         self._music_client = self.create_client(MusicPlay, "/music_play")
@@ -211,6 +218,18 @@ class SocketListener(Node):
                         elif msg == self.horn_message:
                             self.get_logger().info("HORN received")
                             self._call_music_play("horn")
+                        elif msg == self.acnf_message:
+                            self.get_logger().info("fall confirmation received")
+                            vmsg = Bool()
+                            vmsg.data = True
+                            self.image_verified_pub.publish(vmsg)
+                            self._send_to_server("socket", 3, "Image verification: true")
+                        elif msg == self.adny_message:
+                            self.get_logger().info("fall denyall received")
+                            vmsg = Bool()
+                            vmsg.data = False
+                            self.image_verified_pub.publish(vmsg)
+                            self._send_to_server("socket", 3, "Image verification: false")
                         # ignore all other messages
                     # end of the connection in the websocket
                     self.get_logger().warn("Websocket connection closed, will attempt reconnect")
