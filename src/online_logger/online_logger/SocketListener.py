@@ -55,7 +55,7 @@ except Exception as e:
     websockets = None
 
 WS_URL = "wss://magictintin.fr/ws"
-SUBSCRIBE_MSGS = ["bix/wristband:ping", "micasend:ping", "bix/goto:ping", "bix/admin:ping"] #, "bix/fall_alert:ping"
+SUBSCRIBE_MSGS = ["bix/car_wristband:ping", "micasend:ping", "bix/goto:ping", "bix/admin:ping"] #, "bix/fall_alert:ping"
 FALL_MESSAGE = "new fall"
 HORN_MESSAGE = "horn"
 ALRT_MESSAGE = "fall>"
@@ -107,6 +107,7 @@ class SocketListener(Node):
         # publish 
         self.arrived_pub = self.create_publisher(Bool, '/car_arrived_to_fall', 10)
         self.image_verified_pub = self.create_publisher(Bool, '/image_verified', 10)
+        self.someone_fell_pub = self.create_publisher(Bool, '/someone_fell', 10)
         
         # ROS service clients
         self._music_client = self.create_client(MusicPlay, "/music_play")
@@ -198,6 +199,9 @@ class SocketListener(Node):
                         if msg == self.fall_message:
                             self.get_logger().info("FALL received")
                             self._send_to_server("socket", 3, "Fall received")
+                            fmsg = Bool()
+                            fmsg.data = True
+                            self.someone_fell_pub.publish(fmsg)
                             self._send_tts_goal("new fall")
                         if msg == self.stop_message:
                             self.get_logger().info("STOP received")
