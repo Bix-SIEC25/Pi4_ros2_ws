@@ -40,7 +40,9 @@ def generate_launch_description():
     image_sender = Node(
         package="online_logger",
         executable="image_sender",
-        emulate_tty=True
+        emulate_tty=True,
+        respawn=True,
+        respawn_delay=2.0
     )
 
     socket_listener = Node(
@@ -94,13 +96,17 @@ def generate_launch_description():
     audio_player_node = Node(
         package="audio_common",
         executable="audio_player_node",
-        emulate_tty=True
+        emulate_tty=True,
+        respawn=True,
+        respawn_delay=2.0
     )
 
     tts_node = Node(
         package="audio_common",
         executable="tts_node",
-        emulate_tty=True
+        emulate_tty=True,
+        respawn=True,
+        respawn_delay=2.0
     )
 
     music_node = Node(
