@@ -58,4 +58,4 @@ log/
 *.FCBak
 .DS_Store
 ._.DS_Store
-
+.vscode
