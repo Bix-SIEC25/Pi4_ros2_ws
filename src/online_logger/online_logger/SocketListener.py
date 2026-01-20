@@ -68,11 +68,12 @@ def extract_coordinates(input_str):
     if input_str.startswith("goto"):
         input_str = input_str[4:]
 
-    x_str, y_str = input_str.split('|')
+    x_str, y_str, yaw_str = input_str.split('|')
     x = float(x_str)
     y = float(y_str)
+    yaw = float(yaw_str)
 
-    return x, y
+    return x, y, yaw
 
 class SocketListener(Node):
     def __init__(
@@ -209,9 +210,9 @@ class SocketListener(Node):
                             self.stop_navigation()
                         elif msg.startswith(self.goto_message):
                             self.get_logger().info("GOTO received")
-                            x,y = extract_coordinates(msg)
-                            self._send_to_server("socket", 3, f"GOTO received {x=} {y=}")
-                            self.send_goal_once(x,y)
+                            x,y,yaw = extract_coordinates(msg)
+                            self._send_to_server("socket", 3, f"GOTO received {x=} {y=} {yaw=}")
+                            self.send_goal_once(x,y,yaw)
                         elif msg.startswith("tts>"):
                             self.get_logger().info("TTS received")
                             message_to_tts = msg[4:]
@@ -341,7 +342,7 @@ class SocketListener(Node):
 
     ############################### START ##############################
 
-    def send_goal_once(self, px, py):
+    def send_goal_once(self, px, py, yaw):
         if self.goal_already_sent:
             self.get_logger().warn('ALREADY IN NAVIGATION (ignoring)')
             self._send_to_server("goto", 1, "Ignoring new goal")
@@ -371,7 +372,11 @@ class SocketListener(Node):
 
         goal_msg.pose.pose.position.x = px
         goal_msg.pose.pose.position.y = py
-        goal_msg.pose.pose.orientation.w = 0.3064
+        goal_msg.pose.pose.orientation.x = 0.0
+        goal_msg.pose.pose.orientation.y = 0.0
+        goal_msg.pose.pose.orientation.z = math.sin(yaw/2)
+        goal_msg.pose.pose.orientation.w = math.cos(yaw/2)
+        # goal_msg.pose.pose.orientation.w = yaw; #0.3064
 
         send_goal_future = self._client.send_goal_async(
             goal_msg,
