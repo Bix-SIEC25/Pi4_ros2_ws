@@ -28,6 +28,7 @@ Il regroupe les nœuds nécessaires pour :
 - `src/` : paquets ROS 2
   - `can/` : RX/TX CAN (SocketCAN)
   - `car_control/` : génération des commandes moteurs (à partir joystick / mode / logique)
+  - `audio_common/` : envoie des messages TTS et des sons de klaxons à l'enceinte
   - `safety_stop/` : filtre sécurité ultrasons + watchdog commande
   - `interfaces/` : messages ROS personnalisés (`.msg`)
   - `online_logger/` : logs web + WebSocket + upload images
@@ -35,7 +36,7 @@ Il regroupe les nœuds nécessaires pour :
   - `watchdog/` : surveillance (selon implémentation)
   - `simulation/` : nœud(s) de simulation (selon implémentation)
   - `geicar_start/` : launch principal
-  - `sllidar_ros2/`, `imu_tools/`, `audio_common/`, `carla_msgs/`, `joystick/` : dépendances/paquets tiers vendorisés
+  - `imu_tools/`, `audio_common/`, `carla_msgs/`, `joystick/` : dépendances/paquets tiers vendorisés
 
 
 
